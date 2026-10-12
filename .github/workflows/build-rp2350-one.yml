@@ -1,0 +1,64 @@
+name: Build Pico OpenPGP PIV for RP2350-One
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Install ARM build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake ninja-build build-essential python3 git \
+            gcc-arm-none-eabi libnewlib-arm-none-eabi \
+            libstdc++-arm-none-eabi-newlib
+
+      - name: Download official Pico SDK
+        run: |
+          git clone --depth 1 --branch 2.2.0 \
+            https://github.com/raspberrypi/pico-sdk.git "$RUNNER_TEMP/pico-sdk"
+          git -C "$RUNNER_TEMP/pico-sdk" submodule update --init --recursive --depth 1
+          test -f "$RUNNER_TEMP/pico-sdk/src/boards/include/boards/waveshare_rp2350_one.h"
+
+      - name: Download Pico OpenPGP source with submodules
+        run: |
+          git clone https://github.com/polhenarejos/pico-openpgp.git source
+          git -C source submodule update --init --recursive
+          echo "SOURCE_COMMIT=$(git -C source rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Confirm PIV sources are present
+        run: |
+          test -f source/src/piv/cmd_select.c
+          test -f source/src/piv/cmd_asym_keygen.c
+
+      - name: Configure RP2350-One build
+        run: |
+          cmake -S source -B build -G Ninja \
+            -DPICO_SDK_PATH="$RUNNER_TEMP/pico-sdk" \
+            -DPICO_BOARD=waveshare_rp2350_one \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Compile firmware
+        run: cmake --build build --parallel 2
+
+      - name: Prepare UF2 and build metadata
+        run: |
+          test -s build/pico_openpgp.uf2
+          mkdir -p output
+          cp build/pico_openpgp.uf2 output/pico_openpgp_waveshare_rp2350_one.uf2
+          printf 'Project: polhenarejos/pico-openpgp\nSource commit: %s\nBoard: waveshare_rp2350_one\nSDK: 2.2.0\n' "$SOURCE_COMMIT" > output/build-info.txt
+          sha256sum output/*.uf2 > output/SHA256SUMS.txt
+
+      - name: Upload UF2 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pico-openpgp-piv-waveshare-rp2350-one
+          path: output/
+          if-no-files-found: error
+          retention-days: 30
