@@ -16,7 +16,7 @@ on:
       usb_product:
         description: 'USB product string and Edge toast title (Windows may append " detected")'
         required: true
-        default: 'DGS-安全通行证'
+        default: 'DGS-Seckey'
         type: string
       usb_landing_url:
         description: 'WebUSB landing page opened by the Edge/Chrome toast'
@@ -99,7 +99,7 @@ jobs:
 
           DEFAULT_FILE = Path('source/pico-keys-sdk/src/usb/usb_descriptors.c')
           DEFAULT_MANUFACTURER = 'DGSRZ'
-          DEFAULT_PRODUCT = 'DGS-安全通行证'
+          DEFAULT_PRODUCT = 'DGS-Seckey'
           DEFAULT_LANDING = 'https://dgs-druckguss.com'
 
           UTF8_HELPER = r'''
@@ -197,8 +197,13 @@ jobs:
               require(len(text) <= max_chars, f'{field} must be at most {max_chars} characters')
               require('\x00' not in text and '\n' not in text and '\r' not in text,
                       f'{field} must be a single line')
-              require('"' not in text and '\\' not in text, f'{field} must not contain quotes or backslash')
+              require(re.fullmatch(r'[A-Za-z0-9 ._-]+', text),
+                      f'{field} must be ASCII letters, digits, space, . _ -')
               return text
+
+
+          def needs_utf8_decode(*values: str) -> bool:
+              return any(ord(ch) > 127 for value in values for ch in value)
 
 
           def _sub_one(pattern: str, repl: str, text: str, message: str, flags: int = 0) -> str:
@@ -246,6 +251,27 @@ jobs:
               require('"Pico Key"' in text, 'Default USB product string not found')
               text = text.replace('"Pol Henarejos"', c_utf8_literal(manufacturer), 1)
               text = text.replace('"Pico Key"', c_utf8_literal(product), 1)
+
+              text, _ = re.subn(
+                  r'((?:else )?if \(index == 2\) \{)\s*'
+                  r'if \(phy_data\.usb_product_present\) \{\s*'
+                  r'str = phy_data\.usb_product;\s*'
+                  r'\}\s*\}',
+                  r'\1\n            str = string_desc_arr[2];\n        }',
+                  text,
+                  count=1,
+                  flags=re.MULTILINE,
+              )
+              text, _ = re.subn(
+                  r'const char \*product = phy_data\.usb_product_present \? phy_data\.usb_product : string_desc_arr\[2\];',
+                  'const char *product = string_desc_arr[2];',
+                  text,
+                  count=1,
+              )
+
+              if not needs_utf8_decode(manufacturer, product):
+                  require(f'#define URL "{host}"' in text, 'Landing URL was not written')
+                  return text
 
               if 'pk_utf8_to_utf16' not in text:
                   text = _sub_one(
@@ -372,8 +398,7 @@ jobs:
           cmake -S source -B build -G Ninja \
             -DPICO_SDK_PATH="$RUNNER_TEMP/pico-sdk" \
             -DPICO_BOARD=waveshare_rp2350_one \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_FLAGS="-finput-charset=UTF-8"
+            -DCMAKE_BUILD_TYPE=Release
 
       - name: Compile firmware
         run: cmake --build build --parallel 2
