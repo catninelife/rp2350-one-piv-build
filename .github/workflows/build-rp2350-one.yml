@@ -2,6 +2,32 @@ name: Build Pico OpenPGP PIV for RP2350-One
 
 on:
   workflow_dispatch:
+    inputs:
+      source_ref:
+        description: 'Git tag or exact commit for pico-openpgp (v5.0 is release, main is moving)'
+        required: true
+        default: 'v5.0'
+        type: string
+      usb_manufacturer:
+        description: 'USB manufacturer string shown by Windows'
+        required: true
+        default: 'DGSRZ'
+        type: string
+      usb_product:
+        description: 'USB product string and Edge toast title (Windows may append " detected")'
+        required: true
+        default: 'DGS-安全通行证'
+        type: string
+      usb_landing_url:
+        description: 'WebUSB landing page opened by the Edge/Chrome toast'
+        required: true
+        default: 'https://dgs-druckguss.com'
+        type: string
+      disable_webusb_landing:
+        description: 'Disable the Edge/Chrome landing toast (iLandingPage=0)'
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -27,33 +53,361 @@ jobs:
           test -f "$RUNNER_TEMP/pico-sdk/src/boards/include/boards/waveshare_rp2350_one.h"
 
       - name: Download Pico OpenPGP source with submodules
+        env:
+          REQUESTED_REF: ${{ inputs.source_ref }}
         run: |
           git clone https://github.com/polhenarejos/pico-openpgp.git source
+          git -C source checkout --detach "$REQUESTED_REF"
           git -C source submodule update --init --recursive
+          echo "SOURCE_REF=$REQUESTED_REF" >> "$GITHUB_ENV"
           echo "SOURCE_COMMIT=$(git -C source rev-parse HEAD)" >> "$GITHUB_ENV"
 
       - name: Confirm PIV sources are present
         run: |
-          test -f source/src/piv/cmd_select.c
-          test -f source/src/piv/cmd_asym_keygen.c
+          if [ -f source/src/piv/cmd_asym_keygen.c ]; then
+            test -f source/src/piv/cmd_select.c
+          elif [ -f source/src/openpgp/cmd_select.c ]; then
+            echo "PIV sources live under src/openpgp (v5.0 layout)"
+          else
+            echo "PIV sources missing" >&2
+            exit 1
+          fi
+
+      - name: Patch USB product strings and WebUSB landing page
+        env:
+          USB_MANUFACTURER: ${{ inputs.usb_manufacturer }}
+          USB_PRODUCT: ${{ inputs.usb_product }}
+          USB_LANDING_URL: ${{ inputs.usb_landing_url }}
+          DISABLE_WEBUSB_LANDING: ${{ inputs.disable_webusb_landing }}
+        run: |
+          # keep in sync with scripts/patch_pico_usb_branding.py
+          python3 - <<'PY'
+          #!/usr/bin/env python3
+          # -*- coding: utf-8 -*-
+          """Patch pico-keys-sdk usb_descriptors.c USB names and WebUSB landing URL.
+
+          The upstream string callback copies C bytes into UTF-16 one-to-one, which
+          garbles Chinese USB product names. This patch inserts a UTF-8 decoder and
+          replaces the WebUSB URL / manufacturer / product strings.
+          """
+          from __future__ import annotations
+
+          import argparse
+          import os
+          import re
+          from pathlib import Path
+
+          DEFAULT_FILE = Path('source/pico-keys-sdk/src/usb/usb_descriptors.c')
+          DEFAULT_MANUFACTURER = 'DGSRZ'
+          DEFAULT_PRODUCT = 'DGS-安全通行证'
+          DEFAULT_LANDING = 'https://dgs-druckguss.com'
+
+          UTF8_HELPER = r'''
+          static uint8_t pk_utf8_to_utf16(uint16_t *out, uint8_t max_units, const char *str) {
+              uint8_t n = 0;
+              const unsigned char *p = (const unsigned char *)str;
+              if (out == NULL || str == NULL || max_units == 0) {
+                  return 0;
+              }
+              while (*p && n < max_units) {
+                  uint32_t cp;
+                  if (*p < 0x80) {
+                      cp = *p++;
+                  } else if ((*p & 0xE0) == 0xC0 && p[1] && (p[1] & 0xC0) == 0x80) {
+                      cp = ((uint32_t)(*p & 0x1F) << 6) | (uint32_t)(p[1] & 0x3F);
+                      p += 2;
+                  } else if ((*p & 0xF0) == 0xE0 && p[1] && p[2]
+                             && (p[1] & 0xC0) == 0x80 && (p[2] & 0xC0) == 0x80) {
+                      cp = ((uint32_t)(*p & 0x0F) << 12) | ((uint32_t)(p[1] & 0x3F) << 6)
+                           | (uint32_t)(p[2] & 0x3F);
+                      p += 3;
+                  } else if ((*p & 0xF8) == 0xF0 && p[1] && p[2] && p[3]
+                             && (p[1] & 0xC0) == 0x80 && (p[2] & 0xC0) == 0x80 && (p[3] & 0xC0) == 0x80) {
+                      cp = ((uint32_t)(*p & 0x07) << 18) | ((uint32_t)(p[1] & 0x3F) << 12)
+                           | ((uint32_t)(p[2] & 0x3F) << 6) | (uint32_t)(p[3] & 0x3F);
+                      p += 4;
+                  } else {
+                      p++;
+                      continue;
+                  }
+                  if (cp >= 0x10000) {
+                      if ((uint8_t)(n + 2u) > max_units) {
+                          break;
+                      }
+                      cp -= 0x10000;
+                      out[n++] = (uint16_t)(0xD800 | (cp >> 10));
+                      out[n++] = (uint16_t)(0xDC00 | (cp & 0x3FF));
+                  } else {
+                      out[n++] = (uint16_t)cp;
+                  }
+              }
+              return n;
+          }
+
+          '''
+
+
+          class PatchError(Exception):
+              """Refuse an incomplete branding patch."""
+
+
+          def require(condition: bool, message: str) -> None:
+              if not condition:
+                  raise PatchError(message)
+
+
+          def c_utf8_literal(value: str) -> str:
+              parts: list[str] = []
+              for ch in value:
+                  code = ord(ch)
+                  if ch in '\\"':
+                      parts.append('\\' + ch)
+                  elif 0x20 <= code <= 0x7E:
+                      parts.append(ch)
+                  else:
+                      parts.extend(f'\\x{byte:02x}' for byte in ch.encode('utf-8'))
+              return '"' + ''.join(parts) + '"'
+
+
+          def parse_landing_url(value: str) -> tuple[int, str]:
+              text = (value or '').strip()
+              require(text, 'Landing URL is empty')
+              scheme = 1
+              lowered = text.lower()
+              if lowered.startswith('http://'):
+                  scheme = 0
+                  text = text[7:]
+              elif lowered.startswith('https://'):
+                  scheme = 1
+                  text = text[8:]
+              text = text.split('#', 1)[0]
+              text = text.rstrip('/')
+              require(text, 'Landing URL host is empty')
+              require(' ' not in text and '\\' not in text and '"' not in text,
+                      'Landing URL must not contain space, backslash, or quotes')
+              require(re.fullmatch(r'[A-Za-z0-9._~:/?#\[\]@!$&\'()*+,;=-]{1,80}', text),
+                      'Landing URL must be a host or host/path, 1-80 ASCII characters')
+              require('.' in text.split('/', 1)[0], 'Landing URL host needs a dot')
+              return scheme, text
+
+
+          def parse_usb_string(value: str, field: str, max_chars: int = 24) -> str:
+              text = (value or '').strip()
+              require(text, f'{field} is empty')
+              require(len(text) <= max_chars, f'{field} must be at most {max_chars} characters')
+              require('\x00' not in text and '\n' not in text and '\r' not in text,
+                      f'{field} must be a single line')
+              require('"' not in text and '\\' not in text, f'{field} must not contain quotes or backslash')
+              return text
+
+
+          def _sub_one(pattern: str, repl: str, text: str, message: str, flags: int = 0) -> str:
+              updated, count = re.subn(pattern, repl, text, count=1, flags=flags)
+              require(count == 1, message)
+              return updated
+
+
+          def patch_usb_descriptors(
+              source: str,
+              *,
+              manufacturer: str,
+              product: str,
+              landing_url: str,
+              disable_landing: bool,
+          ) -> str:
+              manufacturer = parse_usb_string(manufacturer, 'usb_manufacturer')
+              product = parse_usb_string(product, 'usb_product')
+              scheme, host = parse_landing_url(landing_url)
+              text = source
+
+              text = _sub_one(
+                  r'#define URL\s+"[^"]*"',
+                  f'#define URL "{host}"',
+                  text,
+                  'WebUSB #define URL not found',
+              )
+              text = _sub_one(
+                  r'\.bScheme\s*=\s*[01]\s*,',
+                  f'.bScheme = {scheme},',
+                  text,
+                  'WebUSB bScheme not found',
+              )
+
+              old_land = 'TUD_BOS_WEBUSB_DESCRIPTOR(VENDOR_REQUEST_WEBUSB, 1)'
+              new_land = 'TUD_BOS_WEBUSB_DESCRIPTOR(VENDOR_REQUEST_WEBUSB, 0)'
+              if disable_landing:
+                  require(old_land in text or new_land in text, 'WebUSB landing descriptor not found')
+                  text = text.replace(old_land, new_land, 1)
+              else:
+                  require(old_land in text or new_land in text, 'WebUSB landing descriptor not found')
+                  text = text.replace(new_land, old_land, 1)
+
+              require('"Pol Henarejos"' in text, 'Default USB manufacturer string not found')
+              require('"Pico Key"' in text, 'Default USB product string not found')
+              text = text.replace('"Pol Henarejos"', c_utf8_literal(manufacturer), 1)
+              text = text.replace('"Pico Key"', c_utf8_literal(product), 1)
+
+              if 'pk_utf8_to_utf16' not in text:
+                  text = _sub_one(
+                      r'static uint16_t _desc_str\[32\];',
+                      UTF8_HELPER.lstrip('\n') + 'static uint16_t _desc_str[32];',
+                      text,
+                      'USB string buffer _desc_str[32] not found; cannot install UTF-8 decoder',
+                  )
+
+              text, _ = re.subn(
+                  r'((?:else )?if \(index == 2\) \{)\s*'
+                  r'if \(phy_data\.usb_product_present\) \{\s*'
+                  r'str = phy_data\.usb_product;\s*'
+                  r'\}\s*\}',
+                  r'\1\n            str = string_desc_arr[2];\n        }',
+                  text,
+                  count=1,
+                  flags=re.MULTILINE,
+              )
+              text, _ = re.subn(
+                  r'const char \*product = phy_data\.usb_product_present \? phy_data\.usb_product : string_desc_arr\[2\];',
+                  'const char *product = string_desc_arr[2];',
+                  text,
+                  count=1,
+              )
+
+              text = _sub_one(
+                  r'uint8_t len = \(uint8_t\)MIN\(strlen\(product\), buff_avail\);\s*'
+                  r'for \(size_t ix = 0; ix < len; chr_count\+\+, ix\+\+\) \{\s*'
+                  r'_desc_str\[1 \+ chr_count\] = product\[ix\];\s*'
+                  r'\}\s*'
+                  r'buff_avail -= len;',
+                  'uint8_t added = pk_utf8_to_utf16(&_desc_str[1 + chr_count], buff_avail, product);\n'
+                  '            chr_count = (uint8_t)(chr_count + added);\n'
+                  '            buff_avail = (uint8_t)(buff_avail - added);',
+                  text,
+                  'Product-prefix USB string loop not found',
+                  flags=re.MULTILINE,
+              )
+
+              text = _sub_one(
+                  r'for \(size_t ix = 0; ix < MIN\(strlen\(str\), buff_avail\); chr_count\+\+, ix\+\+\) \{\s*'
+                  r'_desc_str\[1 \+ chr_count\] = str\[ix\];\s*'
+                  r'\}',
+                  '{\n'
+                  '            uint8_t added = pk_utf8_to_utf16(&_desc_str[1 + chr_count], buff_avail, str);\n'
+                  '            chr_count = (uint8_t)(chr_count + added);\n'
+                  '        }',
+                  text,
+                  'USB string copy loop not found',
+                  flags=re.MULTILINE,
+              )
+
+              require('pk_utf8_to_utf16' in text, 'UTF-8 USB string helper missing after patch')
+              require(f'#define URL "{host}"' in text, 'Landing URL was not written')
+              return text
+
+
+          def patch_file(
+              path: Path,
+              *,
+              manufacturer: str,
+              product: str,
+              landing_url: str,
+              disable_landing: bool,
+          ) -> dict[str, str | int | bool]:
+              require(path.is_file(), f'usb_descriptors.c not found: {path}')
+              original = path.read_text(encoding='utf-8')
+              scheme, host = parse_landing_url(landing_url)
+              updated = patch_usb_descriptors(
+                  original,
+                  manufacturer=manufacturer,
+                  product=product,
+                  landing_url=landing_url,
+                  disable_landing=disable_landing,
+              )
+              path.write_text(updated, encoding='utf-8', newline='\n')
+              info = {
+                  'file': str(path),
+                  'manufacturer': parse_usb_string(manufacturer, 'usb_manufacturer'),
+                  'product': parse_usb_string(product, 'usb_product'),
+                  'landing_url': ('http://' if scheme == 0 else 'https://') + host,
+                  'webusb_toast': 'disabled' if disable_landing else 'enabled',
+              }
+              return info
+
+
+          def _env_bool(name: str, default: bool = False) -> bool:
+              raw = os.environ.get(name)
+              if raw is None or raw == '':
+                  return default
+              return raw.strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+          def main() -> None:
+              parser = argparse.ArgumentParser(description=__doc__)
+              parser.add_argument('--file', default=os.environ.get('USB_DESCRIPTORS_C', str(DEFAULT_FILE)))
+              parser.add_argument('--manufacturer', default=os.environ.get('USB_MANUFACTURER', DEFAULT_MANUFACTURER))
+              parser.add_argument('--product', default=os.environ.get('USB_PRODUCT', DEFAULT_PRODUCT))
+              parser.add_argument('--landing-url', default=os.environ.get('USB_LANDING_URL', DEFAULT_LANDING))
+              parser.add_argument('--disable-landing', action='store_true',
+                                  default=_env_bool('DISABLE_WEBUSB_LANDING', False))
+              args = parser.parse_args()
+              try:
+                  info = patch_file(
+                      Path(args.file),
+                      manufacturer=args.manufacturer,
+                      product=args.product,
+                      landing_url=args.landing_url,
+                      disable_landing=args.disable_landing,
+                  )
+              except PatchError as err:
+                  raise SystemExit(f'ERROR: {err}') from err
+              for key, value in info.items():
+                  print(f'{key}: {value}')
+
+
+          if __name__ == '__main__':
+              main()
+          PY
 
       - name: Configure RP2350-One build
         run: |
           cmake -S source -B build -G Ninja \
             -DPICO_SDK_PATH="$RUNNER_TEMP/pico-sdk" \
             -DPICO_BOARD=waveshare_rp2350_one \
-            -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS="-finput-charset=UTF-8"
 
       - name: Compile firmware
         run: cmake --build build --parallel 2
 
       - name: Prepare UF2 and build metadata
+        env:
+          USB_MANUFACTURER: ${{ inputs.usb_manufacturer }}
+          USB_PRODUCT: ${{ inputs.usb_product }}
+          USB_LANDING_URL: ${{ inputs.usb_landing_url }}
+          DISABLE_WEBUSB_LANDING: ${{ inputs.disable_webusb_landing }}
         run: |
           test -s build/pico_openpgp.uf2
           mkdir -p output
           cp build/pico_openpgp.uf2 output/pico_openpgp_waveshare_rp2350_one.uf2
-          printf 'Project: polhenarejos/pico-openpgp\nSource commit: %s\nBoard: waveshare_rp2350_one\nSDK: 2.2.0\n' "$SOURCE_COMMIT" > output/build-info.txt
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          Path('output/build-info.txt').write_text(
+              ''.join([
+                  f"Project: polhenarejos/pico-openpgp\n",
+                  f"Source ref: {os.environ.get('SOURCE_REF', '')}\n",
+                  f"Source commit: {os.environ.get('SOURCE_COMMIT', '')}\n",
+                  f"Board: waveshare_rp2350_one\n",
+                  f"SDK: 2.2.0\n",
+                  f"USB manufacturer: {os.environ.get('USB_MANUFACTURER', '')}\n",
+                  f"USB product: {os.environ.get('USB_PRODUCT', '')}\n",
+                  f"WebUSB landing URL: {os.environ.get('USB_LANDING_URL', '')}\n",
+                  f"WebUSB landing toast: {os.environ.get('DISABLE_WEBUSB_LANDING', '')}\n",
+              ]),
+              encoding='utf-8',
+          )
+          PY
           sha256sum output/*.uf2 > output/SHA256SUMS.txt
+          cat output/build-info.txt
 
       - name: Upload UF2 artifact
         uses: actions/upload-artifact@v4
