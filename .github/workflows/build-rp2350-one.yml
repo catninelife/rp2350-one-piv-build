@@ -44,9 +44,9 @@ jobs:
         env:
           CARD_PROFILE: ${{ matrix.profile }}
         run: |
-          flags="-DPICO_PIV_ECDH_TEST=1 -DPICO_YKMD_EXISTING_KEYS_ONLY=1"
-          if [ "$CARD_PROFILE" = ykmd-atr ]; then flags="$flags -DPICO_YKMD_ATR_TEST=1"; fi
-          cmake -S source -B build -G Ninja -DPICO_SDK_PATH="$RUNNER_TEMP/pico-sdk" -DPICO_BOARD=waveshare_rp2350_one -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="$flags"
+          flags="-DPICO_PIV_ECDH_TEST=ON -DPICO_YKMD_EXISTING_KEYS_ONLY=ON"
+          if [ "$CARD_PROFILE" = ykmd-atr ]; then flags="$flags -DPICO_YKMD_ATR_TEST=ON"; fi
+          cmake -S source -B build -G Ninja -DPICO_SDK_PATH="$RUNNER_TEMP/pico-sdk" -DPICO_BOARD=waveshare_rp2350_one -DCMAKE_BUILD_TYPE=Release $flags
           cmake --build build --parallel 2
       - name: Prepare artifacts
         env:

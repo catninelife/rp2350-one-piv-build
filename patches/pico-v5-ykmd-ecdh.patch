@@ -1,3 +1,20 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index b4a44aa..be097c2 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -59,6 +59,12 @@ else()
+     endif()
+ 
+     add_executable(pico_openpgp)
++    foreach(feature PICO_PIV_ECDH_TEST PICO_YKMD_EXISTING_KEYS_ONLY PICO_YKMD_ATR_TEST)
++        option(${feature} "Enable isolated YKMD compatibility experiment" OFF)
++        if(${feature})
++            target_compile_definitions(pico_openpgp PRIVATE ${feature}=1)
++        endif()
++    endforeach()
+ endif()
+ 
+ set(USB_ITF_CCID 1)
 diff --git a/src/openpgp/openpgp.c b/src/openpgp/openpgp.c
 index 6eeaeab..48234d0 100644
 --- a/src/openpgp/openpgp.c
