@@ -1,4 +1,4 @@
-name: Build RP2350 existing-key ECDH experiment
+name: Build RP2350 existing-key ECDH with PUK recovery
 
 on:
   workflow_dispatch:
@@ -24,6 +24,10 @@ jobs:
         run: |
           cc -std=c11 -Wall -Wextra -Werror -I patches tests/ykmd_existing_keys_test.c -o /tmp/ykmd-policy-test
           /tmp/ykmd-policy-test
+          cc -std=c11 -Wall -Wextra -Werror -DPICO_YKMD_ALLOW_PUK_RESET=0 -I patches tests/ykmd_existing_keys_test.c -o /tmp/ykmd-policy-off-test
+          /tmp/ykmd-policy-off-test
+          cc -std=c11 -Wall -Wextra -Werror -DPICO_YKMD_ALLOW_PUK_RESET=1 -I patches tests/ykmd_existing_keys_test.c -o /tmp/ykmd-policy-recovery-test
+          /tmp/ykmd-policy-recovery-test
       - name: Fetch pinned firmware and SDK
         run: |
           git clone https://github.com/polhenarejos/pico-openpgp.git source
@@ -44,7 +48,7 @@ jobs:
         env:
           CARD_PROFILE: ${{ matrix.profile }}
         run: |
-          flags="-DPICO_PIV_ECDH_TEST=ON -DPICO_YKMD_EXISTING_KEYS_ONLY=ON"
+          flags="-DPICO_PIV_ECDH_TEST=ON -DPICO_YKMD_EXISTING_KEYS_ONLY=ON -DPICO_YKMD_ALLOW_PUK_RESET=ON"
           if [ "$CARD_PROFILE" = ykmd-atr ]; then flags="$flags -DPICO_YKMD_ATR_TEST=ON"; fi
           cmake -S source -B build -G Ninja -DPICO_SDK_PATH="$RUNNER_TEMP/pico-sdk" -DPICO_BOARD=waveshare_rp2350_one -DCMAKE_BUILD_TYPE=Release $flags
           cmake --build build --parallel 2
@@ -68,6 +72,7 @@ jobs:
             'build_commit': os.environ['GITHUB_SHA'],
             'board': 'waveshare_rp2350_one', 'profile': os.environ['CARD_PROFILE'],
             'ecdh_9d': True, 'existing_keys_only': True, 'factory_reset': False,
+            'puk_pin_reset': True, 'change_pin_puk': False,
             'note': 'Experimental firmware; hardware and Windows compatibility require testing.'
           }
           pathlib.Path('output/build-info.json').write_text(json.dumps(data,indent=2)+'\n')
@@ -75,7 +80,7 @@ jobs:
           sha256sum output/* > output/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: rp2350-ecdh-${{ matrix.profile }}
+          name: rp2350-ecdh-puk-reset-${{ matrix.profile }}
           path: output/
           if-no-files-found: error
           retention-days: 30

@@ -1,4 +1,5 @@
 /* Experimental PIV policy: use existing 9A/9D keys, deny administration.
+ * Optional PUK recovery delegates authentication and retries to the PIV handler.
  * Does not restrict other applets. PIN retry accounting remains in firmware.
  */
 #ifndef YKMD_EXISTING_KEYS_H
@@ -21,6 +22,10 @@ static bool ykmd_existing_keys_allowed(uint8_t ins, uint8_t p1, uint8_t p2,
         case 0x20:
             return p2 == 0x80 && ((p1 == 0 && (size == 0 || size == 8)) ||
                                    (p1 == 0xFF && size == 0));
+#if defined(PICO_YKMD_ALLOW_PUK_RESET) && PICO_YKMD_ALLOW_PUK_RESET
+        case 0x2C: /* RESET RETRY COUNTER: 8-byte PUK + 8-byte new PIN. */
+            return p1 == 0 && p2 == 0x80 && size == 16;
+#endif
         case 0xF7:
             return p1 == 0 && size == 0 &&
                    (p2 == 0x9A || p2 == 0x9D || p2 == 0x9B || p2 == 0x80 || p2 == 0x81);
