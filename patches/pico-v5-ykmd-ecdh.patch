@@ -6,7 +6,7 @@ index b4a44aa..be097c2 100644
      endif()
  
      add_executable(pico_openpgp)
-+    foreach(feature PICO_PIV_ECDH_TEST PICO_YKMD_EXISTING_KEYS_ONLY PICO_YKMD_ATR_TEST PICO_YKMD_ALLOW_PUK_RESET)
++    foreach(feature PICO_PIV_ECDH_TEST PICO_YKMD_EXISTING_KEYS_ONLY PICO_YKMD_ATR_TEST PICO_YKMD_ALLOW_PUK_RESET PICO_YKMD_ALLOW_PIN_CHANGE)
 +        option(${feature} "Enable isolated YKMD compatibility experiment" OFF)
 +        if(${feature})
 +            target_compile_definitions(pico_openpgp PRIVATE ${feature}=1)

@@ -1,6 +1,12 @@
 #include <assert.h>
 #include <stdio.h>
 #include "ykmd_existing_keys.h"
+#ifndef PICO_YKMD_ALLOW_PUK_RESET
+#define PICO_YKMD_ALLOW_PUK_RESET 0
+#endif
+#ifndef PICO_YKMD_ALLOW_PIN_CHANGE
+#define PICO_YKMD_ALLOW_PIN_CHANGE 0
+#endif
 
 int main(void) {
     const uint8_t cert[] = {0x5C, 3, 0x5F, 0xC1, 0x0B};
@@ -33,31 +39,30 @@ int main(void) {
     }
     assert(!ykmd_existing_keys_allowed(0xCB, 0x3F, 0xFF, NULL, sizeof(cert)));
     const uint8_t recovery[16] = {0}; /* Synthetic only; guard does not authenticate. */
-    for (unsigned p1 = 0; p1 < 256; ++p1) {
-        for (unsigned p2 = 0; p2 < 256; ++p2) {
-            bool allowed = false;
-#if defined(PICO_YKMD_ALLOW_PUK_RESET) && PICO_YKMD_ALLOW_PUK_RESET
-            allowed = p1 == 0 && p2 == 0x80;
-#endif
-            assert(ykmd_existing_keys_allowed(0x2C, (uint8_t)p1, (uint8_t)p2,
-                                              recovery, sizeof(recovery)) == allowed);
+    const uint8_t maintenance[] = {0x2C, 0x24};
+    for (size_t i = 0; i < sizeof(maintenance); ++i) {
+        uint8_t ins = maintenance[i];
+        bool enabled = ins == 0x2C ? PICO_YKMD_ALLOW_PUK_RESET : PICO_YKMD_ALLOW_PIN_CHANGE;
+        for (unsigned p1 = 0; p1 < 256; ++p1) {
+            for (unsigned p2 = 0; p2 < 256; ++p2) {
+                bool allowed = enabled && p1 == 0 && p2 == 0x80;
+                assert(ykmd_existing_keys_allowed(ins, (uint8_t)p1, (uint8_t)p2,
+                                                  recovery, sizeof(recovery)) == allowed);
+            }
         }
-    }
-    for (size_t size = 0; size <= 255; ++size) {
-        bool allowed = false;
-#if defined(PICO_YKMD_ALLOW_PUK_RESET) && PICO_YKMD_ALLOW_PUK_RESET
-        allowed = size == 16;
-#endif
-        assert(ykmd_existing_keys_allowed(0x2C, 0, 0x80, recovery, size) == allowed);
-        assert(!ykmd_existing_keys_allowed(0x2C, 0, 0x80, NULL, size));
+        for (size_t size = 0; size <= 255; ++size) {
+            bool allowed = enabled && size == 16;
+            assert(ykmd_existing_keys_allowed(ins, 0, 0x80, recovery, size) == allowed);
+            assert(!ykmd_existing_keys_allowed(ins, 0, 0x80, NULL, size));
+        }
     }
     /* Full-sized mutations remain blocked even with recovery enabled. */
     for (size_t i = 0; i < sizeof(writes); ++i) {
-        if (writes[i] == 0x2C) continue;
+        if (writes[i] == 0x2C || writes[i] == 0x24) continue;
         for (unsigned p2 = 0; p2 < 256; ++p2) {
             assert(!ykmd_existing_keys_allowed(writes[i], 0, (uint8_t)p2, recovery, 16));
         }
     }
-    puts("existing-key policy tests passed (including all RESET RETRY parameter pairs)");
+    puts("existing-key policy tests passed (all RESET RETRY / CHANGE PIN parameter pairs)");
     return 0;
 }
