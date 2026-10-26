@@ -40,6 +40,13 @@ def prepare(source, inputs):
         }
 """ + anchor)
     path.write_text(text, newline="\n")
+    deps = source / "pico-keys-sdk/cmake/deps.cmake"
+    text = deps.read_text()
+    text = replace_once(text, 'set(PICOKEYS_MBEDTLS_STD_REF "v3.6.7")',
+                        'set(PICOKEYS_MBEDTLS_STD_REF "068ff080b369adfac81509f9b57b2afabaf82dc5")')
+    text = replace_once(text, 'set(PICOKEYS_LIBCVC_REF "main")',
+                        'set(PICOKEYS_LIBCVC_REF "54562afc4d620c8bdb118183c0db49048baa0b2c")')
+    deps.write_text(text, newline="\n")
 
 
 if __name__ == "__main__":

@@ -34,6 +34,8 @@ jobs:
           git -C source apply --check "$GITHUB_WORKSPACE/firmware/patches/pico-v5-ykmd-ecdh.patch"
           git -C source apply "$GITHUB_WORKSPACE/firmware/patches/pico-v5-ykmd-ecdh.patch"
           cp firmware/patches/ykmd_existing_keys.h source/src/openpgp/ykmd_existing_keys.h
+          # The pinned Keys SDK reads this fixed SDK path directly for LED detection.
+          cp firmware/boards/waveshare_rp2350_zero_cm.h "$RUNNER_TEMP/pico-sdk/src/boards/include/boards/"
           python3 firmware/scripts/prepare_zero_cm.py source
           python3 firmware/scripts/patch_pico_usb_branding.py --file source/pico-keys-sdk/src/usb/usb_descriptors.c --manufacturer DGSRZ --product DGS-Seckey-UAC --landing-url https://dgs-druckguss.com --disable-landing
           git -C source diff --check
@@ -55,7 +57,7 @@ jobs:
             cp "build-$stage/pico_openpgp.uf2" "output/$stage/"
             cp "build-$stage/pico_openpgp.elf" "output/$stage/"
             find "build-$stage" -name '*.map' -exec cp {} "output/$stage/" \;
-            PICOTOOL=$(find "build-$stage" -type f -name picotool | head -1)
+            PICOTOOL=$(find "build-$stage" "$RUNNER_TEMP" -type f -name picotool -print -quit 2>/dev/null || true)
             test -n "$PICOTOOL"
             "$PICOTOOL" info -a "build-$stage/pico_openpgp.uf2" > "output/$stage/picotool-info.txt"
           done
@@ -75,6 +77,8 @@ jobs:
               'source_commit': 'c4869b583fae346fb1f6bd6fef7b7fb833c12c43',
               'keys_sdk_commit': 'b35df81a03ed4248680bc5f2099d4fd97e71baf8',
               'pico_sdk_commit': 'a1438dff1d38bd9c65dbd693f0e5db4b9ae91779',
+              'mbedtls_commit': '068ff080b369adfac81509f9b57b2afabaf82dc5',
+              'libcvc_commit': '54562afc4d620c8bdb118183c0db49048baa0b2c',
               'build_commit': os.environ['GITHUB_SHA'],
               'board': 'waveshare_rp2350_zero_cm', 'flash_bytes': 2097152,
               'profile': 'zero-cm-uac-9a', 'slots': ['9a'], 'usb_product': 'DGS-Seckey-UAC',
