@@ -36,8 +36,15 @@ jobs:
             arm-none-eabi-objdump -d "build-$mode/card_data_recovery.elf" > "output/card-data-$name.disasm.txt"
             arm-none-eabi-readelf -lW "build-$mode/card_data_recovery.elf" > "output/card-data-$name.segments.txt"
             find "build-$mode" -name '*.su' -exec cat {} + > "output/card-data-$name.stack.txt"
+            if [ "$mode" = OFF ]; then
+              for stage in 0 1; do
+                python3 card-reset/verify_ram_elf.py "build-$mode/stage_probe_$stage.elf"
+                cp "build-$mode/stage_probe_$stage.elf" "output/stage-probe-$stage.elf"
+                arm-none-eabi-objdump -d "build-$mode/stage_probe_$stage.elf" > "output/stage-probe-$stage.disasm.txt"
+              done
+            fi
           done
-          cp card-reset/{main.c,guard.c,guard.h,test_guard.c,verify_ram_elf.py,CMakeLists.txt} output/
+          cp card-reset/{main.c,stage_probe.c,guard.c,guard.h,test_guard.c,verify_ram_elf.py,CMakeLists.txt} output/
           sha256sum output/* > output/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
