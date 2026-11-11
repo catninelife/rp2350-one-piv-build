@@ -26,11 +26,14 @@ jobs:
         env:
           PICO_SDK_PATH: ${{ runner.temp }}/pico-sdk
         run: |
-          cmake -S card-reset -B build -G Ninja -DPICO_BOARD=waveshare_rp2350_one -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --parallel 2
-          python3 card-reset/verify_ram_elf.py build/card_data_recovery.elf
           mkdir output
-          cp build/card_data_recovery.elf output/
+          for mode in OFF ON; do
+            cmake -S card-reset -B "build-$mode" -G Ninja -DPICO_BOARD=waveshare_rp2350_one -DCMAKE_BUILD_TYPE=Release -DRECOVERY_EXECUTE_ERASE="$mode"
+            cmake --build "build-$mode" --parallel 2
+            python3 card-reset/verify_ram_elf.py "build-$mode/card_data_recovery.elf"
+            if [ "$mode" = OFF ]; then name=probe; else name=erase; fi
+            cp "build-$mode/card_data_recovery.elf" "output/card-data-$name.elf"
+          done
           cp card-reset/{main.c,guard.c,guard.h,test_guard.c,verify_ram_elf.py,CMakeLists.txt} output/
           sha256sum output/* > output/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4

@@ -2,12 +2,16 @@
 #include <stdint.h>
 #include "pico/stdlib.h"
 #include "boot/picobin.h"
+#include "boot/picoboot_constants.h"
 #include "hardware/irq.h"
 #include "pico/bootrom.h"
 #include "guard.h"
 
 #if !PICO_NO_FLASH
 #error This recovery program must execute from RAM, never from flash.
+#endif
+#ifndef RECOVERY_EXECUTE_ERASE
+#error Recovery mode must be explicitly specified by the build.
 #endif
 
 static int chip_id(uint64_t *id) {
@@ -32,6 +36,11 @@ static int partition(unsigned index, recovery_partition *out) {
 }
 
 static int erase_data(uint32_t start, uint32_t length) {
+#if !RECOVERY_EXECUTE_ERASE
+    (void)start;
+    (void)length;
+    return 0;
+#else
     cflash_flags_t flags = { .flags = (CFLASH_SECLEVEL_VALUE_SECURE << CFLASH_SECLEVEL_LSB) |
                                      (CFLASH_ASPACE_VALUE_STORAGE << CFLASH_ASPACE_LSB) |
                                      (CFLASH_OP_VALUE_ERASE << CFLASH_OP_LSB) };
@@ -39,15 +48,20 @@ static int erase_data(uint32_t start, uint32_t length) {
     int result = rom_flash_op(flags, start, length, NULL);
     restore_interrupts(irq);
     return result;
+#endif
 }
 
 int main(void) {
-    uint32_t workarea[1024];
+    static uint32_t workarea[1024];
     const recovery_ops ops = {chip_id, partition, erase_data};
-    if (rom_load_partition_table((uint8_t *)workarea, sizeof(workarea), true) == 0) {
-        (void)recovery_run(&ops);
-    }
-    /* Host must check data independently; returning here is not a success signal. */
+    int result = -1;
+    if (rom_load_partition_table((uint8_t *)workarea, sizeof(workarea), true) == 0)
+        result = recovery_run(&ops);
+    /* GPIO is disabled (p1=0); p0 can be read back as reboot param 0. */
+    uint32_t marker = result != 0 ? 7u : (RECOVERY_EXECUTE_ERASE ? 12u : 11u);
+    (void)rom_reboot(REBOOT2_FLAG_REBOOT_TYPE_BOOTSEL | REBOOT2_FLAG_NO_RETURN_ON_SUCCESS,
+                     10, marker, 0);
+    /* Fallback: host must verify data independently, even if ROM returns success. */
     rom_reset_usb_boot(0, 0);
     for (;;) tight_loop_contents();
 }
