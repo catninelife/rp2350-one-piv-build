@@ -19,9 +19,9 @@ static const recovery_ops ops = {get_id, get_partition, erase};
 
 static void reset_fixture(void) {
     id = RECOVERY_CHIP_ID;
-    partitions[0] = (recovery_partition){RECOVERY_FIRMWARE_START, RECOVERY_FIRMWARE_END};
-    partitions[1] = (recovery_partition){RECOVERY_DATA_START, RECOVERY_DATA_END};
-    partitions[2] = (recovery_partition){RECOVERY_BINDING_START, RECOVERY_BINDING_END};
+    partitions[0] = (recovery_partition){RECOVERY_FIRMWARE_START, RECOVERY_FIRMWARE_END, RECOVERY_FIRMWARE_PERMISSIONS};
+    partitions[1] = (recovery_partition){RECOVERY_DATA_START, RECOVERY_DATA_END, RECOVERY_DATA_PERMISSIONS};
+    partitions[2] = (recovery_partition){RECOVERY_BINDING_START, RECOVERY_BINDING_END, RECOVERY_BINDING_PERMISSIONS};
     fail_stage = erase_count = erase_result = 0;
 }
 
@@ -40,6 +40,8 @@ int main(void) {
         reset_fixture(); partitions[i].start -= RECOVERY_SECTOR_SIZE;
         assert(recovery_run(&ops) != 0 && erase_count == 0);
         reset_fixture(); partitions[i].end += RECOVERY_SECTOR_SIZE;
+        assert(recovery_run(&ops) != 0 && erase_count == 0);
+        reset_fixture(); partitions[i].permissions ^= UINT32_C(0x80000000);
         assert(recovery_run(&ops) != 0 && erase_count == 0);
     }
     reset_fixture(); id ^= 1u; assert(recovery_run(&ops) != 0 && erase_count == 0);

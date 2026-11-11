@@ -32,6 +32,7 @@ static int partition(unsigned index, recovery_partition *out) {
     if (last < first) return -1;
     out->start = UINT32_C(0x10000000) + first * RECOVERY_SECTOR_SIZE;
     out->end = UINT32_C(0x10000000) + (last + 1) * RECOVERY_SECTOR_SIZE;
+    out->permissions = data[1] & PICOBIN_PARTITION_PERMISSIONS_BITS;
     return 0;
 }
 

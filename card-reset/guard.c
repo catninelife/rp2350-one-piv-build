@@ -22,7 +22,10 @@ int recovery_run(const recovery_ops *ops) {
         ops->partition(1, &data) != 0 ||
         ops->partition(2, &binding) != 0 ||
         firmware.start != RECOVERY_FIRMWARE_START || firmware.end != RECOVERY_FIRMWARE_END ||
+        firmware.permissions != RECOVERY_FIRMWARE_PERMISSIONS ||
         binding.start != RECOVERY_BINDING_START || binding.end != RECOVERY_BINDING_END ||
+        binding.permissions != RECOVERY_BINDING_PERMISSIONS ||
+        data.permissions != RECOVERY_DATA_PERMISSIONS ||
         !recovery_target_allowed(chip_id, data.start, data.end)) {
         return -1;
     }
