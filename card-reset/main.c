@@ -1,9 +1,9 @@
 /* EXPERIMENTAL: device-specific recovery, NOT approved for hardware use. */
 #include <stdint.h>
+#include "pico/stdlib.h"
 #include "boot/picobin.h"
 #include "hardware/irq.h"
 #include "pico/bootrom.h"
-#include "pico/stdlib.h"
 #include "guard.h"
 
 #if !PICO_NO_FLASH
