@@ -56,7 +56,7 @@ int main(void) {
     static uint32_t workarea[1024];
     const recovery_ops ops = {chip_id, partition, erase_data};
     int result = -1;
-    if (rom_load_partition_table((uint8_t *)workarea, sizeof(workarea), true) == 0)
+    if (rom_load_partition_table((uint8_t *)workarea, sizeof(workarea), false) == 0)
         result = recovery_run(&ops);
     /* GPIO is disabled (p1=0); p0 can be read back as reboot param 0. */
     uint32_t marker = result != 0 ? 7u : (RECOVERY_EXECUTE_ERASE ? 12u : 11u);
