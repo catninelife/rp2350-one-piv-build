@@ -33,6 +33,9 @@ jobs:
             python3 card-reset/verify_ram_elf.py "build-$mode/card_data_recovery.elf"
             if [ "$mode" = OFF ]; then name=probe; else name=erase; fi
             cp "build-$mode/card_data_recovery.elf" "output/card-data-$name.elf"
+            arm-none-eabi-objdump -d "build-$mode/card_data_recovery.elf" > "output/card-data-$name.disasm.txt"
+            arm-none-eabi-readelf -lW "build-$mode/card_data_recovery.elf" > "output/card-data-$name.segments.txt"
+            find "build-$mode" -name '*.su' -exec cat {} + > "output/card-data-$name.stack.txt"
           done
           cp card-reset/{main.c,guard.c,guard.h,test_guard.c,verify_ram_elf.py,CMakeLists.txt} output/
           sha256sum output/* > output/SHA256SUMS.txt
