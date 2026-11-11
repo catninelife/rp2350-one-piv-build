@@ -1,90 +1,41 @@
-name: Build RP2350 existing-key ECDH with PIN maintenance
-
+name: Build device-specific RAM data reset candidate
 on:
   workflow_dispatch:
-
 permissions:
   contents: read
-
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        profile: [original-atr, ykmd-atr]
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - name: Install build tools
+      - name: Install tools
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build build-essential python3 git gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib
-      - name: Test PIV administration guard
+      - name: Test target and partition guards
         run: |
-          cc -std=c11 -Wall -Wextra -Werror -I patches tests/ykmd_existing_keys_test.c -o /tmp/ykmd-policy-test
-          /tmp/ykmd-policy-test
-          cc -std=c11 -Wall -Wextra -Werror -DPICO_YKMD_ALLOW_PUK_RESET=0 -I patches tests/ykmd_existing_keys_test.c -o /tmp/ykmd-policy-off-test
-          /tmp/ykmd-policy-off-test
-          cc -std=c11 -Wall -Wextra -Werror -DPICO_YKMD_ALLOW_PUK_RESET=1 -I patches tests/ykmd_existing_keys_test.c -o /tmp/ykmd-policy-recovery-test
-          /tmp/ykmd-policy-recovery-test
-          cc -std=c11 -Wall -Wextra -Werror -DPICO_YKMD_ALLOW_PIN_CHANGE=1 -I patches tests/ykmd_existing_keys_test.c -o /tmp/ykmd-policy-pin-test
-          /tmp/ykmd-policy-pin-test
-          cc -std=c11 -Wall -Wextra -Werror -DPICO_YKMD_ALLOW_PUK_RESET=1 -DPICO_YKMD_ALLOW_PIN_CHANGE=1 -I patches tests/ykmd_existing_keys_test.c -o /tmp/ykmd-policy-maintenance-test
-          /tmp/ykmd-policy-maintenance-test
-      - name: Fetch pinned firmware and SDK
+          cc -std=c11 -Wall -Wextra -Werror card-reset/guard.c card-reset/test_guard.c -o /tmp/card-reset-guard-test
+          /tmp/card-reset-guard-test
+          python3 -m unittest discover -s card-reset -p 'test_*.py' -v
+      - name: Fetch reviewed SDK
         run: |
-          git clone https://github.com/polhenarejos/pico-openpgp.git source
-          git -C source checkout --detach c4869b583fae346fb1f6bd6fef7b7fb833c12c43
-          git -C source submodule update --init --recursive
-          test "$(git -C source/pico-keys-sdk rev-parse HEAD)" = b35df81a03ed4248680bc5f2099d4fd97e71baf8
           git clone https://github.com/raspberrypi/pico-sdk.git "$RUNNER_TEMP/pico-sdk"
           git -C "$RUNNER_TEMP/pico-sdk" checkout --detach a1438dff1d38bd9c65dbd693f0e5db4b9ae91779
-          git -C "$RUNNER_TEMP/pico-sdk" submodule update --init --recursive --depth 1
-      - name: Apply reviewed experiment and USB branding
-        run: |
-          git -C source apply --check "$GITHUB_WORKSPACE/patches/pico-v5-ykmd-ecdh.patch"
-          git -C source apply "$GITHUB_WORKSPACE/patches/pico-v5-ykmd-ecdh.patch"
-          cp patches/ykmd_existing_keys.h source/src/openpgp/ykmd_existing_keys.h
-          python3 scripts/patch_pico_usb_branding.py --file source/pico-keys-sdk/src/usb/usb_descriptors.c --manufacturer DGSRZ --product DGS-Seckey --landing-url https://dgs-druckguss.com
-          git -C source diff --check
-      - name: Configure and compile
+      - name: Compile RAM-only candidate
         env:
-          CARD_PROFILE: ${{ matrix.profile }}
+          PICO_SDK_PATH: ${{ runner.temp }}/pico-sdk
         run: |
-          flags="-DPICO_PIV_ECDH_TEST=ON -DPICO_YKMD_EXISTING_KEYS_ONLY=ON -DPICO_YKMD_ALLOW_PUK_RESET=ON -DPICO_YKMD_ALLOW_PIN_CHANGE=ON"
-          if [ "$CARD_PROFILE" = ykmd-atr ]; then flags="$flags -DPICO_YKMD_ATR_TEST=ON"; fi
-          cmake -S source -B build -G Ninja -DPICO_SDK_PATH="$RUNNER_TEMP/pico-sdk" -DPICO_BOARD=waveshare_rp2350_one -DCMAKE_BUILD_TYPE=Release $flags
+          cmake -S card-reset -B build -G Ninja -DPICO_BOARD=waveshare_rp2350_one -DCMAKE_BUILD_TYPE=Release
           cmake --build build --parallel 2
-      - name: Prepare artifacts
-        env:
-          CARD_PROFILE: ${{ matrix.profile }}
-        run: |
+          python3 card-reset/verify_ram_elf.py build/card_data_recovery.elf
           mkdir output
-          cp build/pico_openpgp.uf2 output/
-          cp build/pico_openpgp.elf output/
-          find build -name '*.map' -exec cp {} output/ \;
-          cp patches/pico-v5-ykmd-ecdh.patch output/
-          cp patches/ykmd_existing_keys.h output/
-          git -C source diff > output/firmware-source.diff
-          git -C source submodule status --recursive > output/submodules.txt
-          python3 - <<'PY'
-          import json, os, pathlib, subprocess
-          data = {
-            'source_commit': subprocess.check_output(['git','-C','source','rev-parse','HEAD'],text=True).strip(),
-            'pico_sdk_commit': 'a1438dff1d38bd9c65dbd693f0e5db4b9ae91779',
-            'build_commit': os.environ['GITHUB_SHA'],
-            'board': 'waveshare_rp2350_one', 'profile': os.environ['CARD_PROFILE'],
-            'ecdh_9d': True, 'existing_keys_only': True, 'factory_reset': False,
-            'puk_pin_reset': True, 'change_pin': True, 'change_puk': False,
-            'note': 'Experimental firmware; hardware and Windows compatibility require testing.'
-          }
-          pathlib.Path('output/build-info.json').write_text(json.dumps(data,indent=2)+'\n')
-          PY
+          cp build/card_data_recovery.elf output/
+          cp card-reset/{main.c,guard.c,guard.h,test_guard.c,verify_ram_elf.py,CMakeLists.txt} output/
           sha256sum output/* > output/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: rp2350-ecdh-pin-maintenance-${{ matrix.profile }}
+          name: card-specific-data-reset-candidate
           path: output/
           if-no-files-found: error
           retention-days: 30
